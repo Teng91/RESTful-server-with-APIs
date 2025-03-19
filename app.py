@@ -1,119 +1,121 @@
-import os
-import pandas as pd
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify
 from flask_restful import Api, Resource
-from werkzeug.utils import secure_filename
+from flasgger import Swagger
+import pandas as pd
+import os
 
 app = Flask(__name__)
 api = Api(app)
+swagger = Swagger(app)
 
-# In-memory database for storing users
-users = {}
+# 用戶數據存儲
+users = []
 
-# Configure upload folder for CSV file
-UPLOAD_FOLDER = './uploads'
-ALLOWED_EXTENSIONS = {'csv'}
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-
-# Helper function to check file extension
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
-
-# User model
-class User:
-    def __init__(self, name, age):
-        self.name = name
-        self.age = age
-
-# POST API to create a user
 class CreateUser(Resource):
     def post(self):
-        data = request.get_json()
+        """
+        創建用戶
+        ---
+        parameters:
+          - name: name
+            in: formData
+            type: string
+            required: true
+            description: 用戶名稱
+          - name: age
+            in: formData
+            type: integer
+            required: true
+            description: 用戶年齡
+        responses:
+          200:
+            description: 用戶創建成功
+        """
+        data = request.form
         name = data.get('name')
         age = data.get('age')
-        
         if not name or not age:
-            return {"message": "Both 'name' and 'age' are required"}, 400
+            return {"message": "Name and age are required"}, 400
+        users.append({"name": name, "age": int(age)})
+        return {"message": "User created successfully"}, 200
 
-        user = User(name, age)
-        users[name] = user
-        return {"message": "User created successfully"}, 201
-
-# DELETE API to delete a specific user by name
 class DeleteUser(Resource):
-    def delete(self, name):
-        if name in users:
-            del users[name]
-            return {"message": f"User {name} deleted successfully"}, 200
-        return {"message": f"User {name} not found"}, 404
+    def delete(self):
+        """
+        刪除用戶
+        ---
+        parameters:
+          - name: name
+            in: formData
+            type: string
+            required: true
+            description: 用戶名稱
+        responses:
+          200:
+            description: 用戶刪除成功
+        """
+        data = request.form
+        name = data.get('name')
+        global users
+        users = [user for user in users if user['name'] != name]
+        return {"message": "User deleted successfully"}, 200
 
-# GET API to list all users
-class ListUsers(Resource):
+class GetUsers(Resource):
     def get(self):
-        user_list = [{"name": user.name, "age": user.age} for user in users.values()]
-        return jsonify(user_list)
+        """
+        獲取用戶列表
+        ---
+        responses:
+          200:
+            description: 返回用戶列表
+        """
+        return jsonify(users)
 
-# POST API to add users from CSV file
-class AddUsersFromCSV(Resource):
+class BulkAddUsers(Resource):
     def post(self):
-        if 'file' not in request.files:
-            return {"message": "No file part"}, 400
-        file = request.files['file']
-        
-        if file.filename == '' or not allowed_file(file.filename):
-            return {"message": "Invalid file type. Please upload a CSV file."}, 400
-        
-        filename = secure_filename(file.filename)
-        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        file.save(file_path)
-        
-        # Read CSV and add users
-        try:
-            df = pd.read_csv(file_path)
-            for _, row in df.iterrows():
-                name = row.get('name')
-                age = row.get('age')
-                if name and age:
-                    user = User(name, age)
-                    users[name] = user
-            return {"message": "Users added from CSV successfully."}, 200
-        except Exception as e:
-            return {"message": f"Error processing CSV: {str(e)}"}, 500
+        """
+        批量添加用戶
+        ---
+        parameters:
+          - name: file
+            in: formData
+            type: file
+            required: true
+            description: 包含用戶數據的 CSV 文件
+        responses:
+          200:
+            description: 用戶批量添加成功
+        """
+        file = request.files.get('file')
+        if not file:
+            return {"message": "CSV file is required"}, 400
+        df = pd.read_csv(file)
+        for _, row in df.iterrows():
+            users.append({"name": row['Name'], "age": int(row['Age'])}) # 匯入csv要注意欄位名稱大小寫，匯入後的鍵值對都是小寫
+        return {"message": "Users added successfully"}, 200
 
-# GET API to calculate average age by the first character of the username
-class CalculateAverageAge(Resource):
+class AverageAge(Resource):
     def get(self):
-        # Group users by the first letter of their name
-        groups = {}
-        for user in users.values():
-            first_letter = user.name[0].upper()
-            if first_letter not in groups:
-                groups[first_letter] = []
-            groups[first_letter].append(user.age)
-        
-        # Calculate average age for each group
-        averages = {}
-        for group, ages in groups.items():
-            average_age = sum(ages) / len(ages)
-            averages[group] = average_age
-        
-        return jsonify(averages)
+        """
+        計算每組用戶的平均年齡
+        ---
+        responses:
+          200:
+            description: 返回每組用戶的平均年齡
+        """
+        if not users:
+            return {"message": "No users available"}, 400
+        df = pd.DataFrame(users)
+        df['group'] = df['name'].str[0].str.upper()
+        result = df.groupby('group')['age'].mean().to_dict()
+        return jsonify(result)
 
-# Add API endpoints
-api.add_resource(CreateUser, '/users')
-api.add_resource(DeleteUser, '/users/<string:name>')
-api.add_resource(ListUsers, '/users')
-api.add_resource(AddUsersFromCSV, '/users/csv')
-api.add_resource(CalculateAverageAge, '/users/average-age')
-
-# Swagger UI setup
-@app.route('/swagger')
-def swagger_ui():
-    return send_from_directory('static', 'index.html')
+# 註冊 API 路由
+api.add_resource(CreateUser, '/create_user')
+api.add_resource(DeleteUser, '/delete_user')
+api.add_resource(GetUsers, '/get_users')
+api.add_resource(BulkAddUsers, '/bulk_add_users')
+api.add_resource(AverageAge, '/average_age')
 
 if __name__ == '__main__':
-    if not os.path.exists(UPLOAD_FOLDER):
-        os.makedirs(UPLOAD_FOLDER)
-    
-    # Start the server
-    app.run(debug=True)
+    app.run(debug=True) # 不顯示bug
