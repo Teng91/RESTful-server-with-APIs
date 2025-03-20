@@ -3,6 +3,7 @@ from flask_restful import Api, Resource
 from flasgger import Swagger
 import pandas as pd
 import os
+import unittest
 
 app = Flask(__name__)
 api = Api(app)
@@ -20,7 +21,7 @@ class CreateUser(Resource):
           - name: name
             in: formData
             type: string
-            required: true
+            required: false
             description: 用戶名稱
           - name: age
             in: formData
@@ -34,9 +35,22 @@ class CreateUser(Resource):
         data = request.form
         name = data.get('name')
         age = data.get('age')
-        if not name or not age:
-            return {"message": "Name and age are required"}, 400
-        users.append({"name": name, "age": int(age)})
+        
+        if not age:
+            return {"message": "Age is required"}, 400 # 一定要輸入年齡
+        
+        try:
+            age = int(age)
+        except ValueError:
+            return jsonify({'error': 'Age must be an integer'}), 400
+        
+        if age < 0 or age > 125:
+            return {"message": "Age out of range"}, 400 # 設定年齡的合理區間
+        
+        if not name:
+            return {"message": "Name is required but user created"}, 200 # 允許在不輸入名字的情況下創建用戶，但會返回提示用戶名稱是必需
+        
+        users.append({"name": name, "age": age})
         return {"message": "User created successfully"}, 200
 
 class DeleteUser(Resource):
@@ -110,6 +124,24 @@ class AverageAge(Resource):
         result = df.groupby('group')['age'].mean().to_dict()
         return jsonify(result)
 
+class TestCreateUserAPI(unittest.TestCase):
+    def setUp(self):
+        self.app = app.test_client()
+        self.app.testing = True
+        global users
+        users = []  # 每次測試前清空user列表
+
+    def test_create_user_empty_name(self):
+        response = self.app.post('/create_user', data={'name': '', 'age': 25})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('Name is required but user created', response.data.decode())
+
+    def test_create_user_age_out_of_range(self):
+        response = self.app.post('/create_user', data={'name': 'TestUser', 'age': 999})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('Age out of range', response.data.decode())
+
+
 # 註冊 API 路由
 api.add_resource(CreateUser, '/create_user')
 api.add_resource(DeleteUser, '/delete_user')
@@ -118,4 +150,4 @@ api.add_resource(BulkAddUsers, '/bulk_add_users')
 api.add_resource(AverageAge, '/average_age')
 
 if __name__ == '__main__':
-    app.run(debug=True) # 不顯示bug
+    app.run()
